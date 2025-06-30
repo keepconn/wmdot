@@ -1,0 +1,329 @@
+#!/bin/sh
+
+set -euo pipefail
+
+wmdot_common() {
+    if ! command -v git >/dev/null 2>&1; then
+        wmdot_error "git is not installed"
+    fi
+
+    if [ -z "${HOME:-}" ]; then
+        wmdot_error "Environment variable \$HOME missing"
+    fi
+
+    if [ -z "${USER:-}" ]; then
+        wmdot_error "Environment variable \$USER missing"
+    fi
+
+    CMD=$(basename "$0")
+
+    if [ -z "${WMDOT_REPO:-}" ]; then
+        WMDOT_REPO="$HOME/.local/var/wmdot"
+    fi
+
+    if [ -z "${WMDOT_ORIG:-}" ]; then
+        WMDOT_ORIG="$HOME/.local/var/original"
+    fi
+}
+
+wmdot_usage() {
+    MESSAGE="$1"
+
+    cat <<EOF
+wmdot, yet another git wrapper for dotfiles.
+
+Usage:
+$CMD <command> ...
+
+Install Commands:
+init:       initialize a local repository
+clone:      clone an upstream repository into home directory
+            e.g. $CMD clone git@github.com:$USER/home.git
+cancel:     remove all tracked files and the local repository
+
+File Commands:
+add (track): add files or changes into git index
+            e.g. $CMD add ~/.bashrc
+untrack:    untrack from git index but keep files
+            e.g. $CMD untrack ~/.bashrc
+co (checkout): restore tracked files from git index
+            e.g. $CMD co ~/.bashrc
+rm:         untrack and remove files
+            e.g. $CMD rm ~/.bashrc
+mv:         move a file
+            e.g. $CMD mv ~/.bashrc ~/.bash_profile
+au (add-update): add updated files into git index
+            e.g. $CMD au             # add all updated files
+            e.g. $CMD au ~/.bashrc   # add specific updated file
+
+Repository Commands:
+commit:     commit changes into local repository
+            e.g. $CMD commit -m "update .bashrc"
+push:       push local committed changes to upstream
+pull:       pull upstream into local repository and home directory
+pullx:      pull upstream and recursively update submodules
+status:     show status of tracked files
+diff:       show diff of tracked files
+log:        show commit logs
+
+Other Commands:
+reinit:     re-initialize all submodules
+x:          execute raw git command
+            e.g. $CMD x submodule deinit --force \$HOME
+
+Environment Variables:
+WMDOT_REPO: local repository (aka GIT_DIR)
+            default: \$HOME/.local/var/wmdot
+WMDOT_ORIG: originals of overwritten files
+            default: \$HOME/.local/var/original
+EOF
+
+    if [ -n "$MESSAGE" ]; then
+        printf "\nAdditional Message:\n%s\n" "$MESSAGE"
+    fi
+}
+
+wmdot_error() {
+    MESSAGE="$1"
+    printf "Error:\n%s\n" "$MESSAGE" >&2
+    exit 1
+}
+
+wmdot_exec() {
+    git --git-dir="$WMDOT_REPO" --work-tree="$HOME" "$@"
+}
+
+wmdot_ls() {
+    git --git-dir="$WMDOT_REPO" ls-tree -r --name-only HEAD
+}
+
+wmdot_continue() {
+    while true; do
+        printf "Continue? [y/N] "
+        read -r KEY
+        case "$KEY" in
+            [Yy]*) return 0 ;;
+            [Nn]*|"") return 1 ;;
+        esac
+    done
+}
+
+wmdot_init() {
+    if [ -e "$WMDOT_REPO" ]; then
+        wmdot_error "Local repository $WMDOT_REPO exists"
+    fi
+
+    cat <<EOF
+$CMD is about to initialize your home directory.
+Local Repository    $WMDOT_REPO
+EOF
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    mkdir -p "$WMDOT_REPO"
+    wmdot_exec init
+}
+
+wmdot_clone() {
+    WMDOT_UP="$1"
+
+    if [ -z "$WMDOT_UP" ]; then
+        wmdot_error "Upstream repository is missing"
+    fi
+    if [ -e "$WMDOT_REPO" ]; then
+        wmdot_error "Local repository $WMDOT_REPO exists"
+    fi
+
+    cat <<EOF
+$CMD is about to clone upstream repository to your local home directory.
+Upstream Repository $WMDOT_UP
+Home Directory      $HOME
+Local Repository    $WMDOT_REPO
+Originals Directory $WMDOT_ORIG
+EOF
+
+    git clone --bare -- "$WMDOT_UP" "$WMDOT_REPO"
+
+    echo "Checking for overlapping files..."
+    OVERLAP_FILE=$(mktemp)
+    wmdot_ls | while IFS= read -r file; do
+        if [ -e "$HOME/$file" ]; then
+            echo "$file" >> "$OVERLAP_FILE"
+        fi
+    done
+
+    if [ -s "$OVERLAP_FILE" ]; then
+        echo "The following files will be overwritten:"
+        while IFS= read -r f; do
+            echo "  $f"
+        done < "$OVERLAP_FILE"
+
+        wmdot_continue || {
+            echo "Aborted by user."
+            rm -rf "$WMDOT_REPO"
+            rm -f "$OVERLAP_FILE"
+            exit 1
+        }
+
+        echo "Keeping original files at $WMDOT_ORIG..."
+        while IFS= read -r f; do
+            SRC="$HOME/$f"
+            DEST="$WMDOT_ORIG/$f"
+            mkdir -p "$(dirname "$DEST")"
+            mv "$SRC" "$DEST"
+        done < "$OVERLAP_FILE"
+    fi
+
+    rm -f "$OVERLAP_FILE"
+
+    echo "Checking out and updating submodules..."
+    wmdot_exec checkout --force
+    wmdot_exec submodule update --init --recursive
+}
+
+wmdot_cancel() {
+    cat <<EOF
+$CMD is about to cancel itself:
+- All tracked files will be removed;
+- Local repository will be removed.
+EOF
+
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    cat <<EOF
+Local Repository    $WMDOT_REPO
+Home Directory      $HOME
+Files:
+EOF
+    wmdot_ls | sed 's/^/  /'
+
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    echo "Removing files..."
+    DIR_FILE=$(mktemp)
+    wmdot_ls | while IFS= read -r file; do
+        wmdot_exec rm --force -- "$HOME/$file" > /dev/null
+        dirname "$HOME/$file" >> "$DIR_FILE"
+    done
+
+    echo "Removing empty parent directories..."
+    sort -r "$DIR_FILE" | uniq | while IFS= read -r dir; do
+        case "$dir" in
+            "$HOME"/*)
+                [ -d "$dir" ] && rmdir "$dir" 2>/dev/null || true
+                ;;
+        esac
+    done
+
+    rm -f "$DIR_FILE"
+    rm -rf "$WMDOT_REPO"
+}
+
+wmdot_main() {
+    wmdot_common
+
+    if [ $# -eq 0 ]; then
+        wmdot_usage "Missing command"
+        exit 1
+    fi
+
+    case "$1" in
+        init)
+            wmdot_init
+            exit $?
+            ;;
+        clone)
+            shift
+            wmdot_clone "$1"
+            exit $?
+            ;;
+        cancel)
+            wmdot_cancel
+            exit $?
+            ;;
+        add|track)
+            shift
+            set -- add --force -- "$@"
+            ;;
+        untrack)
+            shift
+            set -- rm --cached -- "$@"
+            ;;
+        au|add-update)
+            shift
+            set -- add --update -- "$@"
+            ;;
+        mv)
+            shift
+            set -- mv -k --verbose -- "$@"
+            ;;
+        co|checkout)
+            shift
+            if [ $# -eq 0 ]; then
+                set -- checkout
+            else
+                set -- checkout -- "$@"
+            fi
+            ;;
+        rm)
+            shift
+            set -- rm -- "$@"
+            ;;
+        commit)
+            shift
+            if [ $# -eq 0 ]; then
+                set -- commit
+            else
+                set -- commit "$@"
+            fi
+            ;;
+        push)
+            set -- push --set-upstream origin master
+            ;;
+        pull)
+            set -- pull --no-recurse-submodules origin master
+            ;;
+        pullx)
+            wmdot_exec pull --recurse-submodules origin master
+            wmdot_exec submodule update --init --recursive
+            exit $?
+            ;;
+        status)
+            shift
+            set -- status --untracked-files=no "$@"
+            ;;
+        diff|log)
+            # pass directly
+            ;;
+        ls)
+            wmdot_ls
+            exit $?
+            ;;
+        reinit)
+            wmdot_exec submodule deinit --all --force
+            wmdot_exec submodule update --init --recursive
+            exit $?
+            ;;
+        x)
+            shift
+            wmdot_exec "$@"
+            exit $?
+            ;;
+        *)
+            wmdot_usage "Unrecognized command: $1"
+            exit 1
+            ;;
+    esac
+
+    wmdot_exec "$@"
+}
+
+wmdot_main "$@"
