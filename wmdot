@@ -15,8 +15,6 @@ wmdot_common() {
         wmdot_error "Environment variable \$USER missing"
     fi
 
-    CMD=$(basename "$0")
-
     if [ -z "${WMDOT_REPO:-}" ]; then
         WMDOT_REPO="$HOME/.local/var/wmdot"
     fi
@@ -24,6 +22,8 @@ wmdot_common() {
     if [ -z "${WMDOT_ORIG:-}" ]; then
         WMDOT_ORIG="$HOME/.local/var/original"
     fi
+
+    CMD=$(basename -- "$0")
 }
 
 wmdot_usage() {
