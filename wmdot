@@ -61,8 +61,8 @@ Repository Commands:
 commit:     commit changes into local repository
             e.g. $CMD commit -m "update .bashrc"
 push:       push local committed changes to upstream
-pull:       pull upstream into local repository and home directory
-pullx:      pull upstream and recursively update submodules
+pull:       pull upstream into local repository and home directory,
+            and checkout submodules at the correct commit hash
 status:     show status of tracked files
 diff:       show diff of tracked files
 log:        show commit logs
@@ -410,10 +410,7 @@ wmdot_main() {
             set -- push --set-upstream origin master
             ;;
         pull)
-            set -- pull --no-recurse-submodules origin master
-            ;;
-        pullx)
-            wmdot_exec pull --recurse-submodules origin master
+            wmdot_exec pull --no-recurse-submodules origin master
             wmdot_exec submodule update --init --recursive
             exit $?
             ;;
