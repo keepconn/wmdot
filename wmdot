@@ -67,8 +67,17 @@ status:     show status of tracked files
 diff:       show diff of tracked files
 log:        show commit logs
 
-Other Commands:
-reinit:     re-initialize all submodules
+Submodule Commands:
+sm-add:     add a submodule
+            e.g. $CMD sm-add https://zsh/autosuggestions .local/zsh-autosuggestions
+sm-del:     delete submodules
+            e.g. $CMD sm-del .local/zsh-autosuggestions .local/zsh-completions
+sm-update:  update submodules from remote repositories
+            e.g. $CMD sm-update .local/zsh-autosuggestions .local/zsh-completions
+sm-reinit:  deregister, re-registion, re-initialize submodules
+            e.g. $CMD sm-reinit .local/zsh-autosuggestions .local/zsh-completions
+
+Extended Commands:
 x:          execute raw git command
             e.g. $CMD x submodule deinit --force \$HOME
 
@@ -228,6 +237,117 @@ EOF
     rm -rf "$WMDOT_REPO"
 }
 
+wmdot_sm_add() {
+    if [ "$#" -ne "2" ]; then
+        wmdot_usage "$CMD sm-add <repository> <path>"
+        exit 1
+    fi
+
+    local repo="$1"
+    local path="$(trim_slashes "$2")"
+    local dir="$(dirname "$path")"
+    local base="$(basename "$path")"
+
+    if [ ! -d "$dir" ]; then
+        wmdot_error "$dir is not an existing directory"
+    fi
+
+    local inside="$(wmdot_exec -C "$dir" rev-parse --is-inside-work-tree)"
+    if [ "$inside" != "true" ]; then
+        wmdot_error "$dir is not inside the work tree"
+    fi
+
+    local prefix0="$(wmdot_exec -C "$dir" rev-parse --show-toplevel)"
+    local prefix1="$(wmdot_exec -C "$dir" rev-parse --show-prefix)"
+    local abspath="$prefix0/$prefix1$base"
+
+    cat <<EOF
+$CMD is about to add a submodule.
+Repository  $repo
+Path        $abspath
+EOF
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    wmdot_exec submodule add --force -- "$repo" "$path"
+    wmdot_exec submodule update --init --recursive -- "$path"
+}
+
+wmdot_sm_del() {
+    if [ "$#" -ne "1" ]; then
+        wmdot_usage "$CMD sm-del <path>"
+        exit 1
+    fi
+
+    local path="$(trim_slashes "$1")"
+    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
+        wmdot_error "$path is not a submodule"
+    }
+
+    local prefix0="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
+    local prefix1="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
+    local abspath="$prefix0/$prefix1"
+
+    cat <<EOF
+$CMD is about to remove a submodule.
+Path        $abspath
+EOF
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    wmdot_exec submodule deinit --force -- "$path"
+    wmdot_exec rm --force -- "$path"
+    rm -rf -- "$abspath"
+    rm -rf -- "$WMDOT_REPO/modules/$prefix1"
+}
+
+wmdot_sm_update() {
+    if [ "$#" -ne "1" ]; then
+        wmdot_usage "$CMD sm-update <path>"
+        exit 1
+    fi
+
+    local path="$(trim_slashes "$1")"
+    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
+        wmdot_error "$path is not a submodule"
+    }
+
+    wmdot_exec submodule update --remote --recursive -- "$path"
+    wmdot_exec add --update -- "$path"
+}
+
+wmdot_sm_reinit() {
+    if [ "$#" -ne "1" ]; then
+        wmdot_usage "$CMD sm-reinit <path>"
+        exit 1
+    fi
+
+    local path="$(trim_slashes "$1")"
+    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
+        wmdot_error "$path is not a submodule"
+    }
+
+    local prefix0="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
+    local prefix1="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
+    local abspath="$prefix0/$prefix1"
+
+    cat <<EOF
+$CMD is about to deregister, re-register, re-initialize a submodule.
+Path        $abspath
+EOF
+    wmdot_continue || {
+        echo "Aborted by user."
+        exit 1
+    }
+
+    wmdot_exec submodule deinit --force -- "$path"
+    wmdot_exec submodule update --init --recursive -- "$path"
+}
+
 wmdot_main() {
     wmdot_common
 
@@ -308,9 +428,30 @@ wmdot_main() {
             wmdot_ls
             exit $?
             ;;
-        reinit)
-            wmdot_exec submodule deinit --all --force
-            wmdot_exec submodule update --init --recursive
+        sm-add)
+            shift
+            wmdot_sm_add "$@"
+            exit $?
+            ;;
+        sm-del)
+            shift
+            for i in "$@"; do
+                wmdot_sm_del "$i"
+            done
+            exit $?
+            ;;
+        sm-update)
+            shift
+            for i in "$@"; do
+                wmdot_sm_update "$i"
+            done
+            exit $?
+            ;;
+        sm-reinit)
+            shift
+            for i in "$@"; do
+                wmdot_sm_reinit "$i"
+            done
             exit $?
             ;;
         x)
@@ -325,6 +466,15 @@ wmdot_main() {
     esac
 
     wmdot_exec "$@"
+}
+
+trim_slashes() {
+    v="$1"
+    trimmed="${v%/}"
+    while [ "${trimmed%/}" != "$trimmed" ]; do
+      trimmed="${trimmed%/}"
+    done
+    echo "$trimmed"
 }
 
 wmdot_main "$@"
