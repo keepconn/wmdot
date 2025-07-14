@@ -68,6 +68,7 @@ diff:       show diff of tracked files
 log:        show commit logs
 
 Submodule Commands:
+sm-ls:      list all submodule directories
 sm-add:     add a submodule
             e.g. $CMD sm-add https://zsh/autosuggestions .local/zsh-autosuggestions
 sm-del:     delete submodules
@@ -275,6 +276,10 @@ EOF
     wmdot_exec submodule update --init --recursive -- "$path"
 }
 
+wmdot_sm_ls() {
+    wmdot_exec submodule --quiet foreach 'printf "%s\n" "$sm_path"'
+}
+
 wmdot_sm_del() {
     if [ "$#" -ne "1" ]; then
         wmdot_usage "$CMD sm-del <path>"
@@ -315,6 +320,8 @@ wmdot_sm_update() {
     wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
         wmdot_error "$path is not a submodule"
     }
+
+    printf 'Updating submodule %s...\n' "$path"
 
     wmdot_exec submodule update --remote --recursive -- "$path"
     wmdot_exec add --update -- "$path"
@@ -425,6 +432,10 @@ wmdot_main() {
             wmdot_ls
             exit $?
             ;;
+        sm-ls)
+            wmdot_sm_ls
+            exit $?
+            ;;
         sm-add)
             shift
             wmdot_sm_add "$@"
@@ -439,6 +450,13 @@ wmdot_main() {
             ;;
         sm-update)
             shift
+            if [ "$#" -eq "0" ]; then
+                IFS=$(printf '\nX')
+                IFS=${IFS%X}
+                set -- $(wmdot_sm_ls)
+                unset IFS
+                cd "$(wmdot_exec rev-parse --show-toplevel)"
+            fi
             for i in "$@"; do
                 wmdot_sm_update "$i"
             done
