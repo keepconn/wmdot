@@ -287,7 +287,7 @@ wmdot_sm_del() {
     fi
 
     local path="$(trim_slashes "$1")"
-    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
+    wmdot_exec ls-files --stage "$path" | grep -q '^160000' || {
         wmdot_error "$path is not a submodule"
     }
 
@@ -317,7 +317,7 @@ wmdot_sm_update() {
     fi
 
     local path="$(trim_slashes "$1")"
-    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
+    wmdot_exec ls-files --stage "$path" | grep -q '^160000' || {
         wmdot_error "$path is not a submodule"
     }
 
