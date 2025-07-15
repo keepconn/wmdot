@@ -244,40 +244,56 @@ wmdot_sm_add() {
         exit 1
     fi
 
-    local repo="$1"
-    local path="$(trim_slashes "$2")"
-    local dir="$(dirname "$path")"
-    local base="$(basename "$path")"
+    repo="$1"
+    path="$(trim_slashes "$2")"
+    dir="$(dirname "$path")"
+    base="$(basename "$path")"
 
     if [ ! -d "$dir" ]; then
         wmdot_error "$dir is not an existing directory"
     fi
 
-    local inside="$(wmdot_exec -C "$dir" rev-parse --is-inside-work-tree)"
+    inside="$(wmdot_exec -C "$dir" rev-parse --is-inside-work-tree)"
     if [ "$inside" != "true" ]; then
         wmdot_error "$dir is not inside the work tree"
     fi
 
-    local prefix0="$(wmdot_exec -C "$dir" rev-parse --show-toplevel)"
-    local prefix1="$(wmdot_exec -C "$dir" rev-parse --show-prefix)"
-    local abspath="$prefix0/$prefix1$base"
+    top="$(wmdot_exec -C "$dir" rev-parse --show-toplevel)"
+    rel="$(wmdot_exec -C "$dir" rev-parse --show-prefix)"
+    abs="$top/$rel$base"
 
     cat <<EOF
 $CMD is about to add a submodule.
 Repository  $repo
-Path        $abspath
+Path        $abs
 EOF
     wmdot_continue || {
         echo "Aborted by user."
         exit 1
     }
 
-    wmdot_exec submodule add --force -- "$repo" "$path"
-    wmdot_exec submodule update --init --recursive -- "$path"
+    wmdot_exec -C "$top" submodule add --force -- "$repo" "$rel$base"
+    wmdot_exec -C "$top" submodule update --init --recursive -- "$rel$base"
 }
 
 wmdot_sm_ls() {
     wmdot_exec submodule --quiet foreach 'printf "%s\n" "$sm_path"'
+}
+
+wmdot_sm_check() {
+    sc_rel="$(trim_slashes "$1")"
+    sc_all="$(wmdot_sm_ls)"
+
+    IFS=$(printf '\nX')
+    IFS=${IFS%X}
+    for sc_i in $sc_all; do
+        if [ "$sc_i" = "$sc_rel" ]; then
+            unset IFS
+            return 0
+        fi
+    done
+    unset IFS
+    return 1
 }
 
 wmdot_sm_del() {
@@ -286,28 +302,28 @@ wmdot_sm_del() {
         exit 1
     fi
 
-    local path="$(trim_slashes "$1")"
-    wmdot_exec ls-files --stage "$path" | grep -q '^160000' || {
-        wmdot_error "$path is not a submodule"
-    }
+    path="$(trim_slashes "$1")"
+    top="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
+    rel="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
+    abs="$top/$rel"
 
-    local prefix0="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
-    local prefix1="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
-    local abspath="$prefix0/$prefix1"
+    wmdot_sm_check "$rel" || {
+        wmdot_error "$abs is not a submodule"
+    }
 
     cat <<EOF
 $CMD is about to remove a submodule.
-Path        $abspath
+Path        $abs
 EOF
     wmdot_continue || {
         echo "Aborted by user."
         exit 1
     }
 
-    wmdot_exec submodule deinit --force -- "$path"
-    wmdot_exec rm --force -- "$path"
-    rm -rf -- "$abspath"
-    rm -rf -- "$WMDOT_REPO/modules/$prefix1"
+    wmdot_exec -C "$top" submodule deinit --force -- "$rel"
+    wmdot_exec -C "$top" rm --force -- "$rel"
+    rm -rf -- "$abs"
+    rm -rf -- "$WMDOT_REPO/modules/$rel"
 }
 
 wmdot_sm_update() {
@@ -316,15 +332,19 @@ wmdot_sm_update() {
         exit 1
     fi
 
-    local path="$(trim_slashes "$1")"
-    wmdot_exec ls-files --stage "$path" | grep -q '^160000' || {
-        wmdot_error "$path is not a submodule"
+    path="$(trim_slashes "$1")"
+    top="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
+    rel="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
+    abs="$top/$rel"
+
+    wmdot_sm_check "$rel" || {
+        wmdot_error "$abs is not a submodule"
     }
 
-    printf 'Updating submodule %s...\n' "$path"
+    printf 'Updating submodule %s...\n' "$abs"
 
-    wmdot_exec submodule update --remote --recursive -- "$path"
-    wmdot_exec add --update -- "$path"
+    wmdot_exec -C "$top" submodule update --remote --recursive -- "$rel"
+    wmdot_exec -C "$top" add --update -- "$rel"
 }
 
 wmdot_sm_reinit() {
@@ -333,26 +353,26 @@ wmdot_sm_reinit() {
         exit 1
     fi
 
-    local path="$(trim_slashes "$1")"
-    wmdot_exec ls-tree HEAD "$path" | grep -q '^160000' || {
-        wmdot_error "$path is not a submodule"
-    }
+    path="$(trim_slashes "$1")"
+    top="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
+    rel="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
+    abs="$top/$rel"
 
-    local prefix0="$(wmdot_exec -C "$path" rev-parse --show-toplevel)"
-    local prefix1="$(wmdot_exec -C "$path" rev-parse --show-prefix)"
-    local abspath="$prefix0/$prefix1"
+    wmdot_sm_check "$rel" || {
+        wmdot_error "$abs is not a submodule"
+    }
 
     cat <<EOF
 $CMD is about to deregister, re-register, re-initialize a submodule.
-Path        $abspath
+Path        $abs
 EOF
     wmdot_continue || {
         echo "Aborted by user."
         exit 1
     }
 
-    wmdot_exec submodule deinit --force -- "$path"
-    wmdot_exec submodule update --init --recursive -- "$path"
+    wmdot_exec -C "$top" submodule deinit --force -- "$rel"
+    wmdot_exec -C "$top" submodule update --init --recursive -- "$rel"
 }
 
 wmdot_main() {
